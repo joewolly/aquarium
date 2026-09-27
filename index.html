@@ -15,7 +15,7 @@
   #hint{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);color:#fff9;font-size:13px;transition:opacity 2s;pointer-events:none;text-align:center}
   #scene{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);color:#fff;font-size:22px;letter-spacing:.1em;opacity:0;transition:opacity 2s;text-shadow:0 2px 8px #000;pointer-events:none}
 </style>
-<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}</script>
 </head>
 <body>
 <div id="ui">
@@ -25,6 +25,7 @@
   <label>Speed <input id="speed" type="range" min="0.3" max="3" step="0.1" value="1"></label>
   <label>Scene lasts <select id="dur"><option value="120">2 min</option><option value="300" selected>5 min</option><option value="900">15 min</option><option value="0">Never change</option></select></label>
   <label><input id="names" type="checkbox"> Show scene names</label>
+  <label><input id="fx" type="checkbox" checked> Cinematic effects (turn off if choppy)</label>
   <button id="next">Next scene</button><button id="newfish">New fish</button><button id="food">Feed</button><button id="fs">Fullscreen</button>
   <div style="margin-top:6px"><a href="classic.html">2D version</a></div>
 </div>
@@ -32,6 +33,13 @@
 <div id="scene"></div>
 <script type="module">
 import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {BokehPass} from 'three/addons/postprocessing/BokehPass.js';
+import {ShaderPass} from 'three/addons/postprocessing/ShaderPass.js';
+import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 const R=(a,b)=>a+Math.random()*(b-a), RI=(a,b)=>Math.floor(R(a,b+1)), pick=a=>a[Math.floor(Math.random()*a.length)], chance=p=>Math.random()<p;
 const $=id=>document.getElementById(id);
 
@@ -42,7 +50,22 @@ renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.
 renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 const scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,250);
-addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight)});
+// ---------- cinematic post-processing: depth of field, bloom, lens + colour grade, grain
+const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));
+const bokeh=new BokehPass(scene,camera,{focus:20,aperture:.0012,maxblur:.005});composer.addPass(bokeh);
+const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.35,.6,.85);composer.addPass(bloom);
+const grade=new ShaderPass({uniforms:{tDiffuse:{value:null},uTime:{value:0},uTint:{value:new THREE.Color(1,1,1)}},
+  vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+  fragmentShader:`uniform sampler2D tDiffuse;uniform float uTime;uniform vec3 uTint;varying vec2 vUv;
+  float h(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+  void main(){vec2 c=vUv-.5;float r=dot(c,c);vec2 off=c*r*.012;
+    vec3 col=vec3(texture2D(tDiffuse,vUv+off).r,texture2D(tDiffuse,vUv).g,texture2D(tDiffuse,vUv-off).b);
+    col*=mix(vec3(1.),uTint,.25);col*=1.-r*1.1;
+    col+=(h(vUv*vec2(1920.,1080.)+fract(uTime)*91.)-.5)*.025;
+    gl_FragColor=vec4(max(col,0.),1.);}`});
+composer.addPass(grade);composer.addPass(new OutputPass());
+let fx=true;
 
 const U={uTime:{value:0},uCaus:{value:1}};
 const causticGLSL=`
@@ -82,7 +105,7 @@ function genEnv(){
   const e={kind,seed:R(0,100)};
   const presets={
     reef:{wh:R(.52,.56),ws:.7,wl:R(.28,.36),sh:R(.1,.13),sl:R(.62,.75),sun:3,plantH:[R(0,1),R(0,1),R(0,1)],name:'Coral Reef'},
-    lagoon:{wh:R(.47,.5),ws:.75,wl:R(.38,.45),sh:R(.12,.14),sl:R(.78,.85),sun:3.4,plantH:[R(.25,.4)],name:'Shallow Lagoon'},
+    lagoon:{wh:R(.47,.5),ws:.75,wl:R(.38,.45),sh:R(.12,.14),sl:R(.6,.7),sun:2.8,plantH:[R(.25,.4)],name:'Shallow Lagoon'},
     kelp:{wh:R(.42,.47),ws:.5,wl:R(.18,.25),sh:R(.1,.13),sl:R(.35,.45),sun:2.3,plantH:[R(.14,.22)],name:'Kelp Forest'},
     pond:{wh:R(.22,.3),ws:.45,wl:R(.15,.22),sh:R(.08,.1),sl:R(.2,.3),sun:2,plantH:[R(.25,.38)],name:'Freshwater Pond'},
     deep:{wh:R(.6,.64),ws:.7,wl:R(.04,.07),sh:R(.6,.7),sl:.12,sun:.6,plantH:[R(.5,.9)],name:'Deep Ocean'},
@@ -247,18 +270,41 @@ function buildFish(g,glow){
     e.position.set(L*.34,H*.1,s*eyeZ*.9);e.scale.z=.6;grp.add(e)}
   return {grp,U2};}
 
+// ---------- scanned fish models (photogrammetry). Add more in models/manifest.json
+const scannedBase=[];
+function prepScanned(gltf,info){gltf.scene.updateMatrixWorld(true);const parts=[];
+  gltf.scene.traverse(o=>{if(o.isMesh){const g=o.geometry.clone();g.applyMatrix4(o.matrixWorld);parts.push({g,m:o.material})}});
+  const box=new THREE.Box3();parts.forEach(p=>{p.g.computeBoundingBox();box.union(p.g.boundingBox)});
+  const size=box.getSize(new THREE.Vector3()),ctr=box.getCenter(new THREE.Vector3());
+  const axis=size.x>=size.y&&size.x>=size.z?'x':size.z>=size.y?'z':'y';const L=size[axis];
+  const rot=new THREE.Matrix4();if(axis==='z')rot.makeRotationY(Math.PI/2);if(axis==='y')rot.makeRotationZ(-Math.PI/2);
+  const m=new THREE.Matrix4().makeScale(1/L,1/L,1/L).multiply(rot).multiply(new THREE.Matrix4().makeTranslation(-ctr.x,-ctr.y,-ctr.z));
+  if(info.flip)m.premultiply(new THREE.Matrix4().makeRotationY(Math.PI));
+  parts.forEach(p=>{p.g.applyMatrix4(m);p.g.computeBoundingBox()});
+  const b2=new THREE.Box3();parts.forEach(p=>b2.union(p.g.boundingBox));const s2=b2.getSize(new THREE.Vector3());
+  scannedBase.push({parts,info,h:s2.y,w:s2.z});}
+fetch('models/manifest.json').then(r=>r.json()).then(list=>{const ld=new GLTFLoader();
+  list.forEach(info=>ld.load('models/'+info.file,g=>{try{prepScanned(g,info)}catch(e){console.warn('model',info.file,e)}},undefined,e=>console.warn('model',info.file,e)))}).catch(e=>console.warn('manifest',e));
+function genScanned(){const b=pick(scannedBase),len=R(...(b.info.size||[1.2,2.6]));
+  return {id:genomeId++,scanned:b,len,h:len*b.h,w:len*b.w,c1:new THREE.Color(.6,.6,.6),c2:new THREE.Color(.4,.5,.6),
+    tint:b.info.tint===false?new THREE.Color(1,1,1):hsl(R(0,1),R(0,.3),R(.8,1)),school:chance(b.info.school??.35),speed:R(.7,1.1),freq:R(3.5,5.5)};}
+function buildScanned(g,glow){const grp=new THREE.Group(),U2={uPh:{value:R(0,6)},uAmp:{value:.3},uLen:{value:1}};
+  for(const p of g.scanned.parts){const m=p.m.clone();if(m.color)m.color.multiply(g.tint);
+    swimMaterial(m,U2);const me=new THREE.Mesh(p.g,m);me.castShadow=true;me.scale.setScalar(g.len);grp.add(me)}
+  grp.userData.shared=true;return {grp,U2};}
+
 // ---------- fish population
 const fish=[],food=[];
 const bounds={x:30,yMin:.9,yMax:14,zMin:-18,zMax:10};
-function spawnGroup(fromEdge){const g=genGenome(),n=g.school?RI(4,9):1,out=[];
+function spawnGroup(fromEdge){const g=scannedBase.length&&chance(.65)?genScanned():genGenome(),n=g.school?RI(4,9):1,out=[];
   const side=pick([-1,1]),base=new THREE.Vector3(fromEdge?side*(bounds.x+6):R(-18,18),R(2,11),R(-12,6));
-  for(let i=0;i<n;i++){const {grp,U2}=buildFish(g,env?.glow);grp.scale.setScalar(R(1.1,1.5));
+  for(let i=0;i<n;i++){const {grp,U2}=g.scanned?buildScanned(g,env?.glow):buildFish(g,env?.glow);grp.scale.setScalar(R(1.1,1.5));
     grp.position.copy(base).add(new THREE.Vector3(R(-1,1),R(-.7,.7),R(-1,1)).multiplyScalar(n>1?1.5:0));
     const f={g,grp,U2,vel:new THREE.Vector3(fromEdge?-side:R(-1,1),R(-.1,.1),R(-.3,.3)).setLength(g.speed*1.5),target:new THREE.Vector3(),tt:0,leaving:false};
     newTarget(f);if(i>0)f.target.copy(out[0].target);scene.add(grp);fish.push(f);out.push(f)}
   return out;}
 function newTarget(f){f.target.set(R(-22,22),R(bounds.yMin+.5,bounds.yMax-2),R(bounds.zMin+2,bounds.zMax-1));f.tt=R(5,14)}
-function removeFish(f){scene.remove(f.grp);f.grp.traverse(o=>{o.geometry?.dispose();if(o.material){o.material.map?.dispose();o.material.dispose()}});fish.splice(fish.indexOf(f),1)}
+function removeFish(f){scene.remove(f.grp);f.grp.traverse(o=>{if(!f.g.scanned)o.geometry?.dispose();if(o.material){if(!f.g.scanned)o.material.map?.dispose();o.material.dispose()}});fish.splice(fish.indexOf(f),1)}
 function sendAway(f){f.leaving=true;f.target.set(Math.sign(f.grp.position.x||1)*(bounds.x+14),f.grp.position.y,f.grp.position.z)}
 function turnover(){const want=+$('count').value,active=fish.filter(f=>!f.leaving);
   if(active.length>want+3){const g=pick(active).g;active.filter(f=>f.g===g).forEach(sendAway);return}
@@ -297,7 +343,7 @@ function tick(){const rdt=Math.min(clock.getDelta(),.05),dt=rdt*speed,t=clock.el
   if(trans){trans.t+=rdt;const k=trans.t/12;
     if(k<.5){scene.fog.density=THREE.MathUtils.lerp(trans.from,.16,k*2);applyEnvLighting(trans.e,rdt*.6)}
     else{if(!trans.built){env=trans.e;buildDecor(env);resetBubbleSources();trans.built=true;showName();
-        fish.forEach(f=>f.grp.traverse(o=>{if(o.material?.emissive){o.material.emissive.copy(env.glow?f.g.c1:new THREE.Color(0));o.material.emissiveIntensity=env.glow?.35:0}}))}
+        fish.forEach(f=>f.grp.traverse(o=>{if(o.material?.emissive&&!f.g.scanned){o.material.emissive.copy(env.glow?f.g.c1:new THREE.Color(0));o.material.emissiveIntensity=env.glow?.35:0}}))}
       scene.fog.density=THREE.MathUtils.lerp(.16,env.fog,Math.min(1,(k-.5)*2));applyEnvLighting(env,rdt*.8)}
     if(k>=1){scene.fog.density=env.fog;trans=null;scheduleNext(t)}}
   else if(t>nextChange){changeScene();nextChange=Infinity}
@@ -322,13 +368,16 @@ function tick(){const rdt=Math.min(clock.getDelta(),.05),dt=rdt*speed,t=clock.el
     if(b.position.y>17){const s=bubbleSrc[b.userData.src%bubbleSrc.length];b.position.set(s.x+R(-.2,.2),0,s.z+R(-.2,.2))}}
   const mp=moteGeo.attributes.position.array;for(let i=0;i<mp.length;i+=3){mp[i+1]+=dt*.04;if(mp[i+1]>17)mp[i+1]=0}moteGeo.attributes.position.needsUpdate=true;
   camT+=rdt*.03;camera.position.set(Math.sin(camT)*4,4.2+Math.sin(camT*1.3)*.8,21+Math.cos(camT*.7)*1.5);camera.lookAt(Math.sin(camT*.8)*2,3.2,0);
-  renderer.render(scene,camera);requestAnimationFrame(tick);}
+  grade.uniforms.uTime.value=t;if(env)grade.uniforms.uTint.value.copy(scene.background).multiplyScalar(2.5);
+  bokeh.uniforms.focus.value=camera.position.distanceTo(new THREE.Vector3(0,4,2));
+  if(fx)composer.render();else renderer.render(scene,camera);requestAnimationFrame(tick);}
 
 // ---------- UI
 const toggleMenu=()=>document.body.classList.toggle('menu');
 addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(k==='m'||k==='h')toggleMenu()});
 addEventListener('dblclick',toggleMenu);
 $('speed').oninput=e=>speed=+e.target.value;
+$('fx').onchange=e=>fx=e.target.checked;
 $('dur').onchange=()=>scheduleNext(clock.elapsedTime);
 $('next').onclick=()=>{if(!trans)changeScene()};
 $('newfish').onclick=refreshAll;
