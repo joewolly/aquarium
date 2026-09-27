@@ -353,9 +353,12 @@ function drawEel(f){const [a,b]=f.cols;x.lineCap='round';const pts=[];for(let i=
   x.fillStyle='#ffe';x.beginPath();x.arc(44,-3,2.2,0,7);x.fill();x.fillStyle='#000';x.beginPath();x.arc(44.5,-3,1.2,0,7);x.fill();
   x.strokeStyle='#300';x.lineWidth=1.2;x.beginPath();x.moveTo(50,1);x.lineTo(40,2+Math.max(0,Math.sin(time*2))*3);x.stroke()}
 
+const glowCache={};
+function glowSprite(col){if(glowCache[col])return glowCache[col];const g=document.createElement('canvas');g.width=g.height=64;const gx=g.getContext('2d');
+  const rg=gx.createRadialGradient(32,32,0,32,32,32);rg.addColorStop(0,hexA(col,.8));rg.addColorStop(.4,hexA(col,.25));rg.addColorStop(1,hexA(col,0));gx.fillStyle=rg;gx.fillRect(0,0,64,64);return glowCache[col]=g}
 function drawCreature(f){const k=f.size/100;x.save();x.translate(f.x,f.y);
   const depthA=clamp(.35+f.z*.65,0,1);x.globalAlpha=f.alpha??depthA;
-  if(env.glow&&(f.sp.glow||f.sp.kind==='jelly')){x.shadowColor=f.cols[1]||f.cols[0];x.shadowBlur=25*S}
+  if(env.glow&&(f.sp.glow||f.sp.kind==='jelly')){const gs=glowSprite(f.cols[1]||f.cols[0]),r=f.size*.9;x.save();x.globalCompositeOperation='lighter';x.globalAlpha*=.45;x.drawImage(gs,-r,-r*(f.sp.kind==='jelly'?.9:.6),r*2,r*2*(f.sp.kind==='jelly'?.9:.6));x.restore()}
   const sk=f.sp.kind;
   if(sk==='jelly'){x.scale(k,k);drawJelly(f)}
   else if(sk==='seahorse'){x.scale(k*f.face,k);drawSeahorse(f)}
